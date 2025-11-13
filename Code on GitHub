@@ -1,0 +1,94 @@
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(dplyr)
+
+players <- read_csv("data/players.csv")
+sessions <- read_csv("data/sessions.csv")
+
+sessions <- sessions %>%
+  rename(
+    player = hashedEmail,
+    start = start_time,
+    end = end_time
+  ) %>%
+  mutate(
+    start = ymd_hms(start),
+    end = ymd_hms(end),
+    duration = as.numeric(difftime(end, start, units = "mins"))
+  ) %>%
+  filter(!is.na(duration) & duration > 0)
+
+players <- players %>%
+  rename(player = hashedEmail) %>%
+  mutate(
+    Age = as.integer(Age),
+    played_hours = as.numeric(played_hours),
+    subscribe = if_else(subscribe == "TRUE", TRUE, FALSE)
+  )
+
+merged_data <- left_join(sessions, players, by = "player")
+
+player_summary <- merged_data %>%
+  group_by(player) %>%
+  summarise(
+    first_day = min(as_date(start), na.rm = TRUE),
+    num_sessions = n(),
+    avg_session_duration = mean(duration, na.rm = TRUE),
+    total_playtime = sum(duration, na.rm = TRUE) / 60, # in hours
+    active_days = n_distinct(as_date(start)),
+    first_week_days = n_distinct(as_date(start)[as_date(start) <= first_day + days(7)])
+  )
+
+threshold <- quantile(player_summary$total_playtime, 0.75, na.rm = TRUE)
+
+player_summary <- player_summary %>%
+  mutate(
+    high_contributor = total_playtime >= threshold
+  )
+
+eda_data <- left_join(player_summary, players, by = "player")
+
+ggplot(eda_data, aes(x = num_sessions, y = total_playtime, color = high_contributor)) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(
+    title = "Relationship Between Number of Sessions and Total Playtime",
+    x = "Number of Sessions",
+    y = "Total Playtime (hours)",
+    color = "High Contributor"
+  ) +
+  theme_minimal()
+
+ggplot(eda_data, aes(x = num_sessions, fill = high_contributor)) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  scale_y_sqrt() +
+  labs(
+    title = "Distribution of Number of Sessions by Contributor Type (scaled y)",
+    x = "Number of Sessions",
+    y = "Count of Players (√-scaled)",
+    fill = "High Contributor"
+  ) +
+  theme_minimal()
+
+eda_summary <- eda_data %>%
+  group_by(high_contributor) %>%
+  summarise(
+    mean_sessions = mean(num_sessions, na.rm = TRUE),
+    median_sessions = median(num_sessions, na.rm = TRUE),
+    mean_playtime = mean(total_playtime, na.rm = TRUE),
+    median_playtime = median(total_playtime, na.rm = TRUE),
+    mean_duration = mean(avg_session_duration, na.rm = TRUE),
+    median_duration = median(avg_session_duration, na.rm = TRUE),
+    n_players = n()
+  )
+
+knitr::kable(eda_summary, digits = 2)
+
+eda_data <- eda_data %>%
+  select(player, Age, gender, experience, subscribe, played_hours,
+         num_sessions, avg_session_duration, total_playtime,
+         active_days, first_week_days, high_contributor) %>%
+  arrange(desc(total_playtime))
+eda_data
+
+glimpse(eda_data)
